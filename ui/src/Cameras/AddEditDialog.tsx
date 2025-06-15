@@ -2,7 +2,7 @@
 // Copyright (C) 2024 The Moonfire NVR Authors; see AUTHORS and LICENSE.txt.
 // SPDX-License-Identifier: GPL-v3.0-or-later WITH GPL-3.0-linking-exception
 
-import { useState } from "react";
+import React, { useState } from "react";
 import {
   Dialog,
   DialogTitle,
@@ -95,7 +95,7 @@ const AddEditDialog = ({
         record: prior?.streams[index]?.record || false,
         flushIfSec: prior?.streams[index]?.flushIfSec || 120,
         rtspTransport: prior?.streams[index]?.rtspTransport || "tcp",
-        sampleFileDirId: prior?.streams[index]?.sampleFileDirId || null,
+        sampleFileDirId: prior?.streams[index]?.sampleFileDirId ?? null,
         retainBytes: prior?.streams[index]?.retainBytes || 0,
       })),
     },
@@ -452,7 +452,7 @@ const AddEditDialog = ({
                                 !storageDirs ||
                                 storageDirs.status === "error"
                               }
-                              value={field.value || ""}
+                              value={field.value ?? ""}
                             >
                               <MenuItem value="">
                                 <em>No storage directory</em>
@@ -486,31 +486,64 @@ const AddEditDialog = ({
                         rules={{
                           min: { value: 0, message: "Must be non-negative" },
                         }}
-                        render={({ field }) => (
-                          <TextField
-                            {...field}
-                            label="Storage Limit (GB)"
-                            type="number"
-                            fullWidth
-                            error={!!errors.streams?.[index]?.retainBytes}
-                            helperText={
-                              errors.streams?.[index]?.retainBytes?.message ||
-                              "Maximum storage for this stream (0 = unlimited)"
+                        render={({ field }) => {
+                          const [displayValue, setDisplayValue] =
+                            React.useState(() => {
+                              if (field.value && field.value > 0) {
+                                return (
+                                  field.value /
+                                  (1024 * 1024 * 1024)
+                                ).toString();
+                              }
+                              return "";
+                            });
+
+                          // Update display value when field value changes
+                          React.useEffect(() => {
+                            if (
+                              field.value === 0 ||
+                              field.value === null ||
+                              field.value === undefined
+                            ) {
+                              setDisplayValue("");
+                            } else if (field.value > 0) {
+                              setDisplayValue(
+                                (field.value / (1024 * 1024 * 1024)).toString()
+                              );
                             }
-                            disabled={submitting}
-                            value={
-                              field.value
-                                ? (field.value / (1024 * 1024 * 1024)).toFixed(
-                                    2
-                                  )
-                                : ""
+                          }, [field.value]);
+
+                          // Initialize display value when component mounts with existing data
+                          React.useEffect(() => {
+                            if (field.value && field.value > 0) {
+                              setDisplayValue(
+                                (field.value / (1024 * 1024 * 1024)).toString()
+                              );
                             }
-                            onChange={(e) => {
-                              const gb = parseFloat(e.target.value) || 0;
-                              field.onChange(gb * 1024 * 1024 * 1024);
-                            }}
-                          />
-                        )}
+                          }, []);
+
+                          return (
+                            <TextField
+                              label="Storage Limit (GB)"
+                              type="number"
+                              fullWidth
+                              error={!!errors.streams?.[index]?.retainBytes}
+                              helperText={
+                                errors.streams?.[index]?.retainBytes?.message ||
+                                "Maximum storage for this stream (0 = unlimited)"
+                              }
+                              disabled={submitting}
+                              value={displayValue}
+                              onChange={(e) => {
+                                setDisplayValue(e.target.value);
+                                const gb = parseFloat(e.target.value) || 0;
+                                field.onChange(gb * 1024 * 1024 * 1024);
+                              }}
+                              onBlur={field.onBlur}
+                              name={field.name}
+                            />
+                          );
+                        }}
                       />
                     </Grid>
 

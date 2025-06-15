@@ -67,21 +67,6 @@ const formatBytes = (bytes: number): string => {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
 };
 
-const formatDuration = (duration90k: number): string => {
-  const seconds = duration90k / 90000;
-  const days = Math.floor(seconds / 86400);
-  const hours = Math.floor((seconds % 86400) / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-
-  if (days > 0) {
-    return `${days}d ${hours}h ${minutes}m`;
-  } else if (hours > 0) {
-    return `${hours}h ${minutes}m`;
-  } else {
-    return `${minutes}m`;
-  }
-};
-
 const UsageDisplay = ({ storageDir }: { storageDir: api.StorageDir }) => {
   const freeBytes = storageDir.totalBytes - storageDir.usedBytes;
   const usagePercent =

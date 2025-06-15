@@ -18,6 +18,28 @@ export default defineConfig({
       targets: ["defaults", "fully supports es6-module"],
     }),
   ],
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          // MUI components
+          "mui-core": ["@mui/material", "@mui/lab"],
+          "mui-icons": ["@mui/icons-material"],
+          "mui-pickers": ["@mui/x-date-pickers"],
+          // Date utilities
+          "date-utils": ["date-fns", "date-fns-tz"],
+          // React ecosystem
+          "react-vendor": ["react", "react-dom", "react-router-dom"],
+          // Form libraries
+          forms: ["react-hook-form", "react-hook-form-mui"],
+          // Fonts
+          fonts: ["@fontsource/roboto"],
+        },
+      },
+    },
+    // Increase chunk size warning limit since we're intentionally chunking
+    chunkSizeWarningLimit: 1000,
+  },
   server: {
     proxy: {
       "/api": {

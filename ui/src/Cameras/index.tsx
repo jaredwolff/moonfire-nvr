@@ -186,12 +186,13 @@ const Main = ({ Frame, csrf }: Props) => {
         username: (c.camera as any).config?.username,
         password: (c.camera as any).config?.password,
         streams: Object.entries(c.camera.streams || {}).map(
-          ([_, stream]: [string, any]) => ({
+          ([streamType, stream]: [string, any]) => ({
             url: stream?.config?.url,
             record: stream?.record || false,
             flushIfSec: stream?.config?.flushIfSec || 120,
             rtspTransport: stream?.config?.rtspTransport || "tcp",
-            sampleFileDirId: stream?.sampleFileDirId,
+            sampleFileDirId: stream?.sampleFileDirId ?? null,
+            retainBytes: stream?.retainBytes || 0,
           })
         ),
       };

@@ -447,6 +447,117 @@ export interface ReloadConfigurationResponse {
   message: string;
 }
 
+// Storage API functions
+export async function storage(init: RequestInit) {
+  return await json<StorageResponse>("/api/storage", init);
+}
+
+export async function addStorageDir(
+  req: AddStorageDirRequest,
+  init: RequestInit
+) {
+  return await json<AddStorageDirResponse>("/api/storage", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(req),
+    ...init,
+  });
+}
+
+export async function updateStorageDir(
+  id: number,
+  req: UpdateStorageDirRequest,
+  init: RequestInit
+) {
+  return await json<UpdateStorageDirResponse>(`/api/storage/${id}`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(req),
+    ...init,
+  });
+}
+
+export async function deleteStorageDir(
+  id: number,
+  req: DeleteStorageDirRequest,
+  init: RequestInit
+) {
+  return await json<DeleteStorageDirResponse>(`/api/storage/${id}`, {
+    method: "DELETE",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(req),
+    ...init,
+  });
+}
+
+// Storage API types
+export interface StorageResponse {
+  storageDirs: StorageDir[];
+}
+
+export interface StorageDir {
+  id: number;
+  uuid: string;
+  path: string;
+  totalBytes: number;
+  usedBytes: number;
+  streamsUsing: StorageStreamUsage[];
+}
+
+export interface StorageStreamUsage {
+  streamId: number;
+  cameraName: string;
+  streamType: string;
+  usedBytes: number;
+  duration90k: number;
+}
+
+export interface AddStorageDirRequest {
+  csrf?: string;
+  path: string;
+}
+
+export interface AddStorageDirResponse {
+  id: number;
+  uuid: string;
+}
+
+export interface UpdateStorageDirRequest {
+  csrf?: string;
+}
+
+export interface UpdateStorageDirResponse {
+  success: boolean;
+}
+
+export interface DeleteStorageDirRequest {
+  csrf?: string;
+}
+
+export interface DeleteStorageDirResponse {
+  success: boolean;
+}
+
+// Storage directories API for dropdowns
+export async function storageDirs(init: RequestInit) {
+  return await json<StorageDirsResponse>("/api/storage-dirs", init);
+}
+
+export interface StorageDirsResponse {
+  dirs: StorageDirSimple[];
+}
+
+export interface StorageDirSimple {
+  id: number;
+  path: string;
+}
+
 export interface CameraSubset {
   shortName?: string;
   description?: string;
@@ -461,7 +572,8 @@ export interface StreamSubset {
   record?: boolean;
   flushIfSec?: number;
   rtspTransport?: string;
-  sampleFileDirId?: number;
+  sampleFileDirId?: number | null;
+  retainBytes?: number;
 }
 
 export interface AddCameraResponse {

@@ -58,4 +58,5 @@ export interface ManagementStream {
   flushIfSec?: number;
   rtspTransport?: string;
   sampleFileDirId?: number;
+  retainBytes?: number;
 }

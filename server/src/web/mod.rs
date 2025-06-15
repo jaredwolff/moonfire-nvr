@@ -334,6 +334,10 @@ impl Service {
                 CacheControl::PrivateDynamic,
                 self.storage_dir(req, caller, id).await?,
             ),
+            Path::StorageDirs => (
+                CacheControl::PrivateDynamic,
+                self.storage_dirs_simple(req, caller)?,
+            ),
         };
         match cache {
             CacheControl::PrivateStatic => {
@@ -739,6 +743,31 @@ impl Service {
                 "Reload functionality not available (server started in read-only mode?)",
             )),
         }
+    }
+
+    /// Get simplified storage directories list for dropdowns.
+    fn storage_dirs_simple(
+        &self,
+        req: Request<::hyper::body::Incoming>,
+        caller: Caller,
+    ) -> ResponseResult {
+        let permissions = &caller.permissions;
+        if !permissions.view_video {
+            return Err(err!(PermissionDenied, msg("view_video required")));
+        }
+
+        let db = self.db.lock();
+        let mut dirs = Vec::new();
+
+        for (&id, dir) in db.sample_file_dirs_by_id() {
+            dirs.push(json::StorageDirSimple {
+                id,
+                path: dir.path.display().to_string(),
+            });
+        }
+
+        let (parts, _) = req.into_parts();
+        serve_json(&parts, &json::GetStorageDirsSimpleResponse { dirs })
     }
 }
 

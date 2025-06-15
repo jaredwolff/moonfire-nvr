@@ -31,6 +31,7 @@ import { useForm, Controller } from "react-hook-form";
 import * as api from "../api";
 import { useSnackbars } from "../snackbars";
 import { CameraManagement } from "../types";
+import { useEffect } from "react";
 
 interface Props {
   prior: CameraManagement | null;
@@ -51,6 +52,7 @@ interface FormData {
     flushIfSec: number;
     rtspTransport: string;
     sampleFileDirId: number | null;
+    retainBytes: number;
   }[];
 }
 
@@ -67,8 +69,23 @@ const AddEditDialog = ({ prior, onClose, refetch, csrf }: Props) => {
   const [testResults, setTestResults] = useState<
     Record<number, { success: boolean; message: string }>
   >({});
+  const [storageDirs, setStorageDirs] = useState<
+    api.FetchResult<api.StorageDirsResponse> | undefined
+  >();
   const snackbars = useSnackbars();
   const isAdd = prior === null;
+
+  // Fetch storage directories for dropdowns
+  useEffect(() => {
+    const abort = new AbortController();
+    const doFetch = async (signal: AbortSignal) => {
+      setStorageDirs(await api.storageDirs({ signal }));
+    };
+    doFetch(abort.signal);
+    return () => {
+      abort.abort();
+    };
+  }, []);
 
   const {
     control,
@@ -87,7 +104,8 @@ const AddEditDialog = ({ prior, onClose, refetch, csrf }: Props) => {
         record: prior?.streams[index]?.record || false,
         flushIfSec: prior?.streams[index]?.flushIfSec || 120,
         rtspTransport: prior?.streams[index]?.rtspTransport || "tcp",
-        sampleFileDirId: prior?.streams[index]?.sampleFileDirId || undefined,
+        sampleFileDirId: prior?.streams[index]?.sampleFileDirId || null,
+        retainBytes: prior?.streams[index]?.retainBytes || 0,
       })),
     },
   });
@@ -109,7 +127,8 @@ const AddEditDialog = ({ prior, onClose, refetch, csrf }: Props) => {
             record: stream.record,
             flushIfSec: stream.flushIfSec,
             rtspTransport: stream.rtspTransport,
-            sampleFileDirId: stream.sampleFileDirId || undefined,
+            sampleFileDirId: stream.sampleFileDirId,
+            retainBytes: stream.retainBytes,
           })
         ),
       };
@@ -428,14 +447,59 @@ const AddEditDialog = ({ prior, onClose, refetch, csrf }: Props) => {
                         name={`streams.${index}.sampleFileDirId`}
                         control={control}
                         render={({ field }) => (
+                          <FormControl fullWidth>
+                            <InputLabel>Storage Directory</InputLabel>
+                            <Select
+                              {...field}
+                              label="Storage Directory"
+                              disabled={submitting}
+                              value={field.value || ""}
+                            >
+                              <MenuItem value="">
+                                <em>No storage directory</em>
+                              </MenuItem>
+                              {storageDirs?.status === "success" &&
+                                storageDirs.response.dirs.map((dir) => (
+                                  <MenuItem key={dir.id} value={dir.id}>
+                                    {dir.path}
+                                  </MenuItem>
+                                ))}
+                            </Select>
+                          </FormControl>
+                        )}
+                      />
+                    </Grid>
+
+                    <Grid item xs={6}>
+                      <Controller
+                        name={`streams.${index}.retainBytes`}
+                        control={control}
+                        rules={{
+                          min: { value: 0, message: "Must be non-negative" },
+                        }}
+                        render={({ field }) => (
                           <TextField
                             {...field}
-                            label="Sample File Directory ID"
+                            label="Storage Limit (GB)"
                             type="number"
                             fullWidth
+                            error={!!errors.streams?.[index]?.retainBytes}
+                            helperText={
+                              errors.streams?.[index]?.retainBytes?.message ||
+                              "Maximum storage for this stream (0 = unlimited)"
+                            }
                             disabled={submitting}
-                            helperText="Leave empty for default directory"
-                            value={field.value || ""}
+                            value={
+                              field.value
+                                ? (field.value / (1024 * 1024 * 1024)).toFixed(
+                                    2
+                                  )
+                                : ""
+                            }
+                            onChange={(e) => {
+                              const gb = parseFloat(e.target.value) || 0;
+                              field.onChange(gb * 1024 * 1024 * 1024);
+                            }}
                           />
                         )}
                       />

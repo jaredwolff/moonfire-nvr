@@ -28,6 +28,7 @@ import { Routes, Route, Navigate } from "react-router-dom";
 import LiveActivity from "./Live";
 import UsersActivity from "./Users";
 import CamerasActivity from "./Cameras";
+import StorageActivity from "./Storage";
 import ChangePassword from "./ChangePassword";
 import Header from "./components/Header";
 
@@ -184,6 +185,12 @@ function App() {
         path="cameras"
         element={
           <CamerasActivity Frame={Frame} csrf={toplevel!.user?.session?.csrf} />
+        }
+      />
+      <Route
+        path="storage"
+        element={
+          <StorageActivity Frame={Frame} csrf={toplevel!.user?.session?.csrf} />
         }
       />
       <Route path="*" element={<Navigate to="/" replace />} />

@@ -570,7 +570,9 @@ impl Service {
                                                      Stream type: {}\n\
                                                      Media: {:?}\n\
                                                      URL: {}",
-                                                    stream.media(), params, url_str
+                                                    stream.media(),
+                                                    params,
+                                                    url_str
                                                 ));
                                             }
                                         }

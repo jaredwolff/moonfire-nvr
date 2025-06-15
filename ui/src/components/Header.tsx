@@ -12,6 +12,7 @@ import ListIcon from "@mui/icons-material/List";
 import PeopleIcon from "@mui/icons-material/People";
 import Videocam from "@mui/icons-material/Videocam";
 import CameraAltIcon from "@mui/icons-material/CameraAlt";
+import StorageIcon from "@mui/icons-material/Storage";
 import * as api from "../api";
 
 import MoonfireMenu from "../AppMenu";
@@ -105,6 +106,19 @@ export default function Header({
                 <CameraAltIcon />
               </ListItemIcon>
               <ListItemText primary="Cameras" />
+            </ListItemButton>
+          )}
+          {toplevel?.permissions.adminCameras && (
+            <ListItemButton
+              key="storage"
+              onClick={toggleShowMenu}
+              component={Link}
+              to="/storage"
+            >
+              <ListItemIcon>
+                <StorageIcon />
+              </ListItemIcon>
+              <ListItemText primary="Storage" />
             </ListItemButton>
           )}
         </List>

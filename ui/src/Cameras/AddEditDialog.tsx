@@ -31,13 +31,13 @@ import { useForm, Controller } from "react-hook-form";
 import * as api from "../api";
 import { useSnackbars } from "../snackbars";
 import { CameraManagement } from "../types";
-import { useEffect } from "react";
 
 interface Props {
   prior: CameraManagement | null;
   onClose: () => void;
   refetch: () => void;
   csrf?: string;
+  storageDirs?: api.FetchResult<api.StorageDirsResponse>;
 }
 
 interface FormData {
@@ -62,30 +62,21 @@ const RTSP_TRANSPORTS = [
   { value: "udp", label: "UDP" },
 ];
 
-const AddEditDialog = ({ prior, onClose, refetch, csrf }: Props) => {
+const AddEditDialog = ({
+  prior,
+  onClose,
+  refetch,
+  csrf,
+  storageDirs,
+}: Props) => {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [testingStream, setTestingStream] = useState<number | null>(null);
   const [testResults, setTestResults] = useState<
     Record<number, { success: boolean; message: string }>
   >({});
-  const [storageDirs, setStorageDirs] = useState<
-    api.FetchResult<api.StorageDirsResponse> | undefined
-  >();
   const snackbars = useSnackbars();
   const isAdd = prior === null;
-
-  // Fetch storage directories for dropdowns
-  useEffect(() => {
-    const abort = new AbortController();
-    const doFetch = async (signal: AbortSignal) => {
-      setStorageDirs(await api.storageDirs({ signal }));
-    };
-    doFetch(abort.signal);
-    return () => {
-      abort.abort();
-    };
-  }, []);
 
   const {
     control,
@@ -192,7 +183,11 @@ const AddEditDialog = ({ prior, onClose, refetch, csrf }: Props) => {
     }
 
     setTestingStream(streamIndex);
-    setTestResults((prev) => ({ ...prev, [streamIndex]: undefined }));
+    setTestResults((prev) => {
+      const newResults = { ...prev };
+      delete newResults[streamIndex];
+      return newResults;
+    });
 
     try {
       const streamType = ["main", "sub", "ext"][streamIndex] as api.StreamType;
@@ -452,12 +447,26 @@ const AddEditDialog = ({ prior, onClose, refetch, csrf }: Props) => {
                             <Select
                               {...field}
                               label="Storage Directory"
-                              disabled={submitting}
+                              disabled={
+                                submitting ||
+                                !storageDirs ||
+                                storageDirs.status === "error"
+                              }
                               value={field.value || ""}
                             >
                               <MenuItem value="">
                                 <em>No storage directory</em>
                               </MenuItem>
+                              {storageDirs === undefined && (
+                                <MenuItem value="" disabled>
+                                  Loading storage directories...
+                                </MenuItem>
+                              )}
+                              {storageDirs?.status === "error" && (
+                                <MenuItem value="" disabled>
+                                  Error loading storage directories
+                                </MenuItem>
+                              )}
                               {storageDirs?.status === "success" &&
                                 storageDirs.response.dirs.map((dir) => (
                                   <MenuItem key={dir.id} value={dir.id}>

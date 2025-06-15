@@ -15,7 +15,7 @@ import TableHead from "@mui/material/TableHead";
 import TableRow, { TableRowProps } from "@mui/material/TableRow";
 import Typography from "@mui/material/Typography";
 import Chip from "@mui/material/Chip";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import * as api from "../api";
 import { FrameProps } from "../App";
 import AddIcon from "@mui/icons-material/Add";
@@ -67,7 +67,7 @@ const Row = ({
   </TableRow>
 );
 
-const StreamChips = ({ streams }: { streams: any }) => (
+const StreamChips = React.memo(({ streams }: { streams: any }) => (
   <div style={{ display: "flex", gap: "4px", flexWrap: "wrap" }}>
     {Object.entries(streams || {}).map(
       ([streamType, stream]: [string, any]) => {
@@ -103,7 +103,8 @@ const StreamChips = ({ streams }: { streams: any }) => (
       }
     )}
   </div>
-);
+));
+StreamChips.displayName = "StreamChips";
 
 const Main = ({ Frame, csrf }: Props) => {
   const [cameras, setCameras] = useState<
@@ -118,11 +119,14 @@ const Main = ({ Frame, csrf }: Props) => {
     undefined | CameraManagement
   >();
   const [reloading, setReloading] = useState(false);
+  const [storageDirs, setStorageDirs] = useState<
+    api.FetchResult<api.StorageDirsResponse> | undefined
+  >();
   const snackbars = useSnackbars();
 
-  const refetch = () => setFetchSeq((s) => s + 1);
+  const refetch = useCallback(() => setFetchSeq((s) => s + 1), []);
 
-  const handleReload = async () => {
+  const handleReload = useCallback(async () => {
     setReloading(true);
     try {
       const result = await api.reloadConfiguration({ csrf }, {});
@@ -146,7 +150,7 @@ const Main = ({ Frame, csrf }: Props) => {
     } finally {
       setReloading(false);
     }
-  };
+  }, [csrf, snackbars]);
 
   useEffect(() => {
     const abort = new AbortController();
@@ -159,28 +163,43 @@ const Main = ({ Frame, csrf }: Props) => {
     };
   }, [fetchSeq]);
 
-  const convertCameraToManagement = (c: api.CameraWithId): CameraManagement => {
-    return {
-      id: c.id,
-      uuid: c.uuid,
-      shortName: c.camera.shortName,
-      description: c.camera.description,
-      onvifBaseUrl: (c.camera as any).config?.onvifBaseUrl,
-      username: (c.camera as any).config?.username,
-      password: (c.camera as any).config?.password,
-      streams: Object.entries(c.camera.streams || {}).map(
-        ([_, stream]: [string, any]) => ({
-          url: stream?.config?.url,
-          record: stream?.record || false,
-          flushIfSec: stream?.config?.flushIfSec || 120,
-          rtspTransport: stream?.config?.rtspTransport || "tcp",
-          sampleFileDirId: stream?.sampleFileDirId,
-        })
-      ),
+  // Fetch storage directories once on component mount
+  useEffect(() => {
+    const abort = new AbortController();
+    const doFetch = async (signal: AbortSignal) => {
+      setStorageDirs(await api.storageDirs({ signal }));
     };
-  };
+    doFetch(abort.signal);
+    return () => {
+      abort.abort();
+    };
+  }, []);
 
-  const renderCameraStatus = (camera: Camera) => {
+  const convertCameraToManagement = useCallback(
+    (c: api.CameraWithId): CameraManagement => {
+      return {
+        id: c.id,
+        uuid: c.uuid,
+        shortName: c.camera.shortName,
+        description: c.camera.description,
+        onvifBaseUrl: (c.camera as any).config?.onvifBaseUrl,
+        username: (c.camera as any).config?.username,
+        password: (c.camera as any).config?.password,
+        streams: Object.entries(c.camera.streams || {}).map(
+          ([_, stream]: [string, any]) => ({
+            url: stream?.config?.url,
+            record: stream?.record || false,
+            flushIfSec: stream?.config?.flushIfSec || 120,
+            rtspTransport: stream?.config?.rtspTransport || "tcp",
+            sampleFileDirId: stream?.sampleFileDirId,
+          })
+        ),
+      };
+    },
+    []
+  );
+
+  const renderCameraStatus = useCallback((camera: Camera) => {
     const streams = camera.streams || {};
     const hasRecordingStreams = Object.values(streams).some(
       (stream: any) => stream?.record
@@ -196,7 +215,7 @@ const Main = ({ Frame, csrf }: Props) => {
     }
 
     return <Chip label="Live Only" size="small" color="info" />;
-  };
+  }, []);
 
   return (
     <Frame>
@@ -251,28 +270,31 @@ const Main = ({ Frame, csrf }: Props) => {
               </TableRow>
             )}
             {cameras?.status === "success" &&
-              cameras.response.cameras.map((c: api.CameraWithId) => (
-                <Row
-                  key={c.uuid}
-                  cameraName={c.camera.shortName}
-                  description={c.camera.description || <em>none</em>}
-                  streams={<StreamChips streams={c.camera.streams} />}
-                  status={renderCameraStatus(c.camera)}
-                  gutter={
-                    <IconButton
-                      aria-label="more"
-                      onClick={(e) =>
-                        setMore({
-                          camera: convertCameraToManagement(c),
-                          anchor: e.currentTarget,
-                        })
-                      }
-                    >
-                      <MoreVertIcon />
-                    </IconButton>
-                  }
-                />
-              ))}
+              cameras.response.cameras.map((c: api.CameraWithId) => {
+                const handleMoreClick = (
+                  e: React.MouseEvent<HTMLButtonElement>
+                ) => {
+                  setMore({
+                    camera: convertCameraToManagement(c),
+                    anchor: e.currentTarget,
+                  });
+                };
+
+                return (
+                  <Row
+                    key={c.uuid}
+                    cameraName={c.camera.shortName}
+                    description={c.camera.description || <em>none</em>}
+                    streams={<StreamChips streams={c.camera.streams} />}
+                    status={renderCameraStatus(c.camera)}
+                    gutter={
+                      <IconButton aria-label="more" onClick={handleMoreClick}>
+                        <MoreVertIcon />
+                      </IconButton>
+                    }
+                  />
+                );
+              })}
           </TableBody>
         </Table>
       </TableContainer>
@@ -308,6 +330,7 @@ const Main = ({ Frame, csrf }: Props) => {
           refetch={refetch}
           onClose={() => setCameraToEdit(undefined)}
           csrf={csrf}
+          storageDirs={storageDirs}
         />
       )}
       <DeleteDialog

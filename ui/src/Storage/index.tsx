@@ -29,7 +29,6 @@ import DeleteDialog from "./DeleteDialog";
 import AddDialog from "./AddDialog";
 
 import React from "react";
-import { useSnackbars } from "../snackbars";
 
 interface Props {
   Frame: (props: FrameProps) => JSX.Element;
@@ -50,14 +49,7 @@ interface More {
   anchor: HTMLElement;
 }
 
-const Row = ({
-  path,
-  usage,
-  streams,
-  status,
-  gutter,
-  ...rest
-}: RowProps) => (
+const Row = ({ path, usage, streams, status, gutter, ...rest }: RowProps) => (
   <TableRow {...rest}>
     <TableCell>{path}</TableCell>
     <TableCell>{usage}</TableCell>
@@ -91,9 +83,11 @@ const formatDuration = (duration90k: number): string => {
 };
 
 const UsageDisplay = ({ storageDir }: { storageDir: api.StorageDir }) => {
-  const usagePercent = storageDir.totalBytes > 0
-    ? (storageDir.usedBytes / storageDir.totalBytes) * 100
-    : 0;
+  const freeBytes = storageDir.totalBytes - storageDir.usedBytes;
+  const usagePercent =
+    storageDir.totalBytes > 0
+      ? (storageDir.usedBytes / storageDir.totalBytes) * 100
+      : 0;
 
   const getUsageColor = (percent: number) => {
     if (percent > 90) return "error";
@@ -101,11 +95,15 @@ const UsageDisplay = ({ storageDir }: { storageDir: api.StorageDir }) => {
     return "primary";
   };
 
+  // Debug info
+  const hasStreams = storageDir.streamsUsing.length > 0;
+  const hasUsage = storageDir.usedBytes > 0;
+
   return (
     <Box sx={{ minWidth: 200 }}>
       <Box sx={{ display: "flex", justifyContent: "space-between", mb: 1 }}>
         <Typography variant="body2">
-          {formatBytes(storageDir.usedBytes)} / {formatBytes(storageDir.totalBytes)}
+          {formatBytes(storageDir.usedBytes)} / {formatBytes(freeBytes)} free
         </Typography>
         <Typography variant="body2" color="text.secondary">
           {usagePercent.toFixed(1)}%
@@ -117,6 +115,24 @@ const UsageDisplay = ({ storageDir }: { storageDir: api.StorageDir }) => {
         color={getUsageColor(usagePercent)}
         sx={{ height: 8, borderRadius: 4 }}
       />
+      {!hasUsage && hasStreams && (
+        <Typography
+          variant="caption"
+          color="warning.main"
+          sx={{ mt: 1, display: "block" }}
+        >
+          No recordings yet
+        </Typography>
+      )}
+      {!hasStreams && (
+        <Typography
+          variant="caption"
+          color="info.main"
+          sx={{ mt: 1, display: "block" }}
+        >
+          No streams configured
+        </Typography>
+      )}
     </Box>
   );
 };
@@ -129,28 +145,29 @@ const StreamsList = ({ streams }: { streams: api.StorageStreamUsage[] }) => (
       </Typography>
     ) : (
       streams.map((stream, index) => (
-        <Box key={index} sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-          <Chip
-            label={`${stream.cameraName} (${stream.streamType})`}
-            size="small"
-            variant="outlined"
-          />
-          <Typography variant="caption" color="text.secondary">
-            {formatBytes(stream.usedBytes)} • {formatDuration(stream.duration90k)}
-          </Typography>
-        </Box>
+        <Chip
+          key={index}
+          label={`${stream.cameraName} (${stream.streamType})`}
+          size="small"
+          variant="outlined"
+        />
       ))
     )}
   </Box>
 );
 
 const StatusDisplay = ({ storageDir }: { storageDir: api.StorageDir }) => {
-  const usagePercent = storageDir.totalBytes > 0
-    ? (storageDir.usedBytes / storageDir.totalBytes) * 100
-    : 0;
+  const usagePercent =
+    storageDir.totalBytes > 0
+      ? (storageDir.usedBytes / storageDir.totalBytes) * 100
+      : 0;
 
   if (storageDir.totalBytes === 0) {
-    return <Chip label="Inaccessible" size="small" color="error" />;
+    return (
+      <Tooltip title="Directory is not accessible. Check permissions and path.">
+        <Chip label="Inaccessible" size="small" color="error" />
+      </Tooltip>
+    );
   }
 
   if (usagePercent > 95) {
@@ -158,9 +175,24 @@ const StatusDisplay = ({ storageDir }: { storageDir: api.StorageDir }) => {
   } else if (usagePercent > 85) {
     return <Chip label="High Usage" size="small" color="warning" />;
   } else if (storageDir.streamsUsing.length > 0) {
-    return <Chip label="Active" size="small" color="success" />;
+    const hasRecordings = storageDir.usedBytes > 0;
+    return (
+      <Tooltip
+        title={
+          hasRecordings
+            ? "Directory is actively recording"
+            : "Streams configured but no recordings yet"
+        }
+      >
+        <Chip label="Active" size="small" color="success" />
+      </Tooltip>
+    );
   } else {
-    return <Chip label="Available" size="small" color="info" />;
+    return (
+      <Tooltip title="Directory ready. Configure camera streams to use this storage.">
+        <Chip label="Available" size="small" color="info" />
+      </Tooltip>
+    );
   }
 };
 
@@ -174,7 +206,6 @@ const Main = ({ Frame, csrf }: Props) => {
   const [deleteStorageDir, setDeleteStorageDir] = useState<
     undefined | api.StorageDir
   >();
-  const snackbars = useSnackbars();
 
   const refetch = () => setFetchSeq((s) => s + 1);
 
@@ -276,10 +307,20 @@ const Main = ({ Frame, csrf }: Props) => {
             setDeleteStorageDir(more?.storageDir);
             setMore(undefined);
           }}
-          disabled={more?.storageDir.streamsUsing.length > 0}
+          disabled={
+            more?.storageDir.streamsUsing.length
+              ? more.storageDir.streamsUsing.length > 0
+              : false
+          }
         >
           <Typography
-            color={more?.storageDir.streamsUsing.length > 0 ? "text.disabled" : "error"}
+            color={
+              more?.storageDir.streamsUsing.length
+                ? more.storageDir.streamsUsing.length > 0
+                  ? "text.disabled"
+                  : "error"
+                : "error"
+            }
           >
             Delete
           </Typography>

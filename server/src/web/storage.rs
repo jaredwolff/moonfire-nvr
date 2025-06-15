@@ -108,7 +108,7 @@ impl Service {
             // Try to get filesystem stats if directory is accessible
             if let Ok(dir_handle) = dir.get() {
                 if let Ok(stat) = dir_handle.statfs() {
-                    total_bytes = (stat.blocks() * stat.fragment_size()) as i64;
+                    total_bytes = (stat.blocks_available() * stat.fragment_size()) as i64;
                 }
             }
 
@@ -161,7 +161,7 @@ impl Service {
         let mut total_bytes = 0i64;
         if let Ok(dir_handle) = dir.get() {
             if let Ok(stat) = dir_handle.statfs() {
-                total_bytes = (stat.blocks() * stat.fragment_size()) as i64;
+                total_bytes = (stat.blocks_available() * stat.fragment_size()) as i64;
             }
         }
 

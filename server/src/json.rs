@@ -662,7 +662,6 @@ pub struct PutUsersResponse {
 
 /// Request body for `POST /api/cameras`.
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct PostCameras<'a> {
     #[serde(borrow)]
     pub csrf: Option<&'a str>,
@@ -678,7 +677,6 @@ pub struct PostCamerasResponse {
 
 /// Request body for `PATCH /api/cameras/<uuid>`.
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct PatchCamera<'a> {
     #[serde(borrow)]
     pub csrf: Option<&'a str>,
@@ -688,7 +686,6 @@ pub struct PatchCamera<'a> {
 
 /// Request body for `DELETE /api/cameras/<uuid>`.
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct DeleteCamera<'a> {
     #[serde(borrow)]
     pub csrf: Option<&'a str>,
@@ -731,7 +728,7 @@ pub struct CameraSubset<'a> {
     #[serde(borrow)]
     pub password: Option<&'a str>,
 
-    pub streams: Option<[StreamSubset<'a>; db::db::NUM_STREAM_TYPES]>,
+    pub streams: Option<Vec<StreamSubset<'a>>>,
 }
 
 /// Stream configuration subset for API requests.

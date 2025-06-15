@@ -186,6 +186,7 @@ export interface ToplevelResponse {
 
 export interface Permissions {
   adminUsers?: boolean;
+  adminCameras?: boolean;
   readCameraConfigs?: boolean;
   updateSignals?: boolean;
   viewVideo?: boolean;
@@ -323,6 +324,126 @@ export async function deleteUser(
     body: JSON.stringify(req),
     ...init,
   });
+}
+
+// Camera management API functions
+
+export async function cameras(init: RequestInit) {
+  return await json<CamerasResponse>("/api/cameras", init);
+}
+
+export async function addCamera(req: AddCameraRequest, init: RequestInit) {
+  return await myfetch("/api/cameras", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(req),
+    ...init,
+  });
+}
+
+export async function updateCamera(
+  uuid: string,
+  req: UpdateCameraRequest,
+  init: RequestInit
+) {
+  return await myfetch(`/api/cameras/${uuid}`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(req),
+    ...init,
+  });
+}
+
+export async function deleteCamera(
+  uuid: string,
+  req: DeleteCameraRequest,
+  init: RequestInit
+) {
+  return await myfetch(`/api/cameras/${uuid}`, {
+    method: "DELETE",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(req),
+    ...init,
+  });
+}
+
+export async function testCamera(
+  uuid: string,
+  req: TestCameraRequest,
+  init: RequestInit
+) {
+  return await json<TestCameraResponse>(`/api/cameras/${uuid}/test`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(req),
+    ...init,
+  });
+}
+
+// Camera management API types
+export interface CamerasResponse {
+  cameras: CameraWithId[];
+}
+
+export interface CameraWithId {
+  id: number;
+  uuid: string;
+  camera: Camera;
+}
+
+export interface AddCameraRequest {
+  csrf?: string;
+  camera: CameraSubset;
+}
+
+export interface UpdateCameraRequest {
+  csrf?: string;
+  update?: CameraSubset;
+  precondition?: CameraSubset;
+}
+
+export interface DeleteCameraRequest {
+  csrf?: string;
+}
+
+export interface TestCameraRequest {
+  csrf?: string;
+  streamType: StreamType;
+}
+
+export interface TestCameraResponse {
+  success: boolean;
+  message: string;
+}
+
+export interface CameraSubset {
+  shortName?: string;
+  description?: string;
+  onvifBaseUrl?: string;
+  username?: string;
+  password?: string;
+  streams?: StreamSubset[];
+}
+
+export interface StreamSubset {
+  url?: string;
+  record?: boolean;
+  flushIfSec?: number;
+  rtspTransport?: string;
+  sampleFileDirId?: number;
+}
+
+export interface AddCameraResponse {
+  id: number;
+  uuid: string;
 }
 
 export interface RecordingSpecifier {

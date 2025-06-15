@@ -12,6 +12,7 @@ use uuid::Uuid;
 use crate::json::{
     self, CameraWithId, GetCamerasResponse, PostCamerasResponse, TestCameraResponse,
 };
+use crate::stream;
 
 use super::{
     into_json_body, parse_json_body, plain_response, require_csrf_if_session, serve_json, Caller,
@@ -69,7 +70,9 @@ impl Service {
             bail!(Unauthenticated, msg("must have admin_cameras permission"));
         }
         let (parts, b) = into_json_body(req).await?;
+        tracing::info!("Received camera POST body: {}", String::from_utf8_lossy(&b));
         let mut r: json::PostCameras = parse_json_body(&b)?;
+        tracing::info!("Parsed camera request: {:#?}", r);
         require_csrf_if_session(&caller, r.csrf)?;
 
         let short_name = r
@@ -516,6 +519,10 @@ impl Service {
         };
 
         // Use spawn_blocking to avoid the runtime nesting issue
+        let url_str = url.to_string();
+        let username = camera_config.username.clone();
+        let password = camera_config.password.clone();
+
         tokio::task::spawn_blocking(move || {
             // Create a minimal test that just tries to connect to the RTSP stream
             // This is a simplified version that doesn't use the full stream infrastructure
@@ -529,19 +536,22 @@ impl Service {
 
             rt.block_on(async {
                 let timeout = std::time::Duration::from_secs(30);
-
                 // Use retina directly for a simple connection test
                 let mut session_options = retina::client::SessionOptions::default()
                     .user_agent(format!("Moonfire NVR {}", env!("CARGO_PKG_VERSION")));
 
-                // Add credentials if provided
-                session_options = session_options.creds(credentials);
+                if !username.is_empty() {
+                    session_options = session_options.creds(Some(retina::client::Credentials {
+                        username: username.clone(),
+                        password: password.clone(),
+                    }));
+                }
 
                 let setup_options = retina::client::SetupOptions::default();
 
                 match tokio::time::timeout(
                     timeout,
-                    retina::client::Session::describe(url.clone(), session_options),
+                    retina::client::Session::describe(url_str.parse().unwrap(), session_options),
                 )
                 .await
                 {
@@ -560,9 +570,7 @@ impl Service {
                                                      Stream type: {}\n\
                                                      Media: {:?}\n\
                                                      URL: {}",
-                                                    stream.media(),
-                                                    params,
-                                                    &url
+                                                    stream.media(), params, url_str
                                                 ));
                                             }
                                         }
@@ -570,7 +578,7 @@ impl Service {
                                             "Connection successful!\n\
                                              URL: {}\n\
                                              No detailed stream information available",
-                                            &url
+                                            url_str
                                         ))
                                     }
                                     Err(e) => Err(err!(

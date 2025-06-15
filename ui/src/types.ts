@@ -39,3 +39,23 @@ export interface Day {
   startTime90k: number;
   endTime90k: number;
 }
+
+// Camera management types
+export interface CameraManagement {
+  id: number;
+  uuid: string;
+  shortName: string;
+  description?: string;
+  onvifBaseUrl?: string;
+  username?: string;
+  password?: string;
+  streams: ManagementStream[];
+}
+
+export interface ManagementStream {
+  url?: string;
+  record?: boolean;
+  flushIfSec?: number;
+  rtspTransport?: string;
+  sampleFileDirId?: number;
+}

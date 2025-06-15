@@ -7,7 +7,7 @@ import react from "@vitejs/plugin-react-swc";
 import viteCompression from "vite-plugin-compression";
 import viteLegacyPlugin from "@vitejs/plugin-legacy";
 
-const target = process.env.PROXY_TARGET ?? "http://localhost:8080/";
+const target = process.env.PROXY_TARGET ?? "http://localhost:3333/";
 
 // https://vitejs.dev/config/
 export default defineConfig({

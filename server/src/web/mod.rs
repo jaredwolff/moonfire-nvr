@@ -326,6 +326,14 @@ impl Service {
                 CacheControl::PrivateDynamic,
                 self.reload(req, caller).await?,
             ),
+            Path::Storage => (
+                CacheControl::PrivateDynamic,
+                self.storage(req, caller).await?,
+            ),
+            Path::StorageDir(id) => (
+                CacheControl::PrivateDynamic,
+                self.storage_dir(req, caller, id).await?,
+            ),
         };
         match cache {
             CacheControl::PrivateStatic => {

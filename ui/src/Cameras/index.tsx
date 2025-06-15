@@ -20,12 +20,16 @@ import * as api from "../api";
 import { FrameProps } from "../App";
 import AddIcon from "@mui/icons-material/Add";
 import MoreVertIcon from "@mui/icons-material/MoreVert";
+import RefreshIcon from "@mui/icons-material/Refresh";
+import CircularProgress from "@mui/material/CircularProgress";
 import IconButton from "@mui/material/IconButton";
+import Tooltip from "@mui/material/Tooltip";
 import DeleteDialog from "./DeleteDialog";
 import AddEditDialog from "./AddEditDialog";
 
 import React from "react";
 import { CameraManagement, Camera } from "../types";
+import { useSnackbars } from "../snackbars";
 
 interface Props {
   Frame: (props: FrameProps) => JSX.Element;
@@ -113,8 +117,36 @@ const Main = ({ Frame, csrf }: Props) => {
   const [deleteCamera, setDeleteCamera] = useState<
     undefined | CameraManagement
   >();
+  const [reloading, setReloading] = useState(false);
+  const snackbars = useSnackbars();
 
   const refetch = () => setFetchSeq((s) => s + 1);
+
+  const handleReload = async () => {
+    setReloading(true);
+    try {
+      const result = await api.reloadConfiguration({ csrf }, {});
+
+      if (result.status === "success") {
+        snackbars.enqueue({
+          message: "Configuration reload initiated successfully",
+          key: "reload-success",
+        });
+      } else {
+        snackbars.enqueue({
+          message: result.status === "error" ? result.message : "Reload failed",
+          key: "reload-error",
+        });
+      }
+    } catch (err) {
+      snackbars.enqueue({
+        message: err instanceof Error ? err.message : "Unknown error occurred",
+        key: "reload-error",
+      });
+    } finally {
+      setReloading(false);
+    }
+  };
 
   useEffect(() => {
     const abort = new AbortController();
@@ -177,12 +209,27 @@ const Main = ({ Frame, csrf }: Props) => {
               streams="Streams"
               status="Status"
               gutter={
-                <IconButton
-                  aria-label="add"
-                  onClick={() => setCameraToEdit(null)}
-                >
-                  <AddIcon />
-                </IconButton>
+                <div style={{ display: "flex", gap: "8px" }}>
+                  <IconButton
+                    aria-label="add"
+                    onClick={() => setCameraToEdit(null)}
+                  >
+                    <AddIcon />
+                  </IconButton>
+                  <Tooltip title="Reload camera configuration">
+                    <IconButton
+                      aria-label="reload"
+                      onClick={handleReload}
+                      disabled={reloading}
+                    >
+                      {reloading ? (
+                        <CircularProgress size={24} />
+                      ) : (
+                        <RefreshIcon />
+                      )}
+                    </IconButton>
+                  </Tooltip>
+                </div>
               }
             />
           </TableHead>

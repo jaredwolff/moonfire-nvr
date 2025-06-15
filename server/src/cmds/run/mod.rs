@@ -133,32 +133,71 @@ pub fn run(args: Args) -> Result<i32, Error> {
 
 async fn async_run(read_only: bool, config: &ConfigFile) -> Result<i32, Error> {
     let (shutdown_tx, shutdown_rx) = base::shutdown::channel();
+    let (reload_tx, mut reload_rx) = tokio::sync::mpsc::channel::<()>(1);
     let mut shutdown_tx = Some(shutdown_tx);
 
+    // Spawn signal handlers
     tokio::pin! {
         let int = signal(SignalKind::interrupt())?;
         let term = signal(SignalKind::terminate())?;
-        let inner = inner(read_only, config, shutdown_rx);
+        let hup = signal(SignalKind::hangup())?;
     }
 
-    tokio::select! {
-        _ = int.recv() => {
-            info!("Received SIGINT; shutting down gracefully. \
-                   Send another SIGINT or SIGTERM to shut down immediately.");
-            shutdown_tx.take();
-        },
-        _ = term.recv() => {
-            info!("Received SIGTERM; shutting down gracefully. \
-                   Send another SIGINT or SIGTERM to shut down immediately.");
-            shutdown_tx.take();
-        },
-        result = &mut inner => return result,
+    loop {
+        let (inner_shutdown_tx, inner_shutdown_rx) = base::shutdown::channel();
+        let inner_future = inner(
+            read_only,
+            config,
+            inner_shutdown_rx,
+            Some(reload_tx.clone()),
+        );
+
+        tokio::select! {
+            _ = int.recv() => {
+                info!("Received SIGINT; shutting down gracefully. \
+                       Send another SIGINT or SIGTERM to shut down immediately.");
+                shutdown_tx.take();
+                drop(inner_shutdown_tx);
+                break;
+            },
+            _ = term.recv() => {
+                info!("Received SIGTERM; shutting down gracefully. \
+                       Send another SIGINT or SIGTERM to shut down immediately.");
+                shutdown_tx.take();
+                drop(inner_shutdown_tx);
+                break;
+            },
+            _ = hup.recv() => {
+                info!("Received SIGHUP; reloading camera configuration...");
+                drop(inner_shutdown_tx);
+                // Wait for graceful shutdown
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                continue; // Restart the inner loop with fresh configuration
+            },
+            _ = reload_rx.recv() => {
+                info!("Received reload request; reloading camera configuration...");
+                drop(inner_shutdown_tx);
+                // Wait for graceful shutdown
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                continue; // Restart the inner loop with fresh configuration
+            },
+            result = inner_future => {
+                match result {
+                    Ok(code) => return Ok(code),
+                    Err(e) => return Err(e),
+                }
+            },
+        }
     }
+
+    // Final shutdown phase
+    let inner_future = inner(read_only, config, shutdown_rx, None);
+    tokio::pin!(inner_future);
 
     tokio::select! {
         _ = int.recv() => bail!(Cancelled, msg("immediate shutdown due to second signal (SIGINT)")),
         _ = term.recv() => bail!(Cancelled, msg("immediate shutdown due to second singal (SIGTERM)")),
-        result = &mut inner => result,
+        result = &mut inner_future => result,
     }
 }
 
@@ -230,6 +269,7 @@ async fn inner(
     read_only: bool,
     config: &ConfigFile,
     shutdown_rx: base::shutdown::Receiver,
+    reload_tx: Option<tokio::sync::mpsc::Sender<()>>,
 ) -> Result<i32, Error> {
     let clocks = clock::RealClocks {};
     let (_db_dir, conn) = super::open_conn(
@@ -371,6 +411,8 @@ async fn inner(
     // Start the web interface(s).
     let own_euid = nix::unistd::Uid::effective();
     let mut preopened = get_preopened_sockets()?;
+    let mut web_handles = Vec::new();
+
     for bind in &config.binds {
         let svc = Arc::new(web::Service::new(web::Config {
             db: db.clone(),
@@ -382,31 +424,42 @@ async fn inner(
             trust_forward_hdrs: bind.trust_forward_headers,
             time_zone_name: time_zone_name.to_owned(),
             privileged_unix_uid: bind.own_uid_is_privileged.then_some(own_euid),
+            reload_tx: reload_tx.clone(),
         })?);
         let mut listener = make_listener(&bind.address, &mut preopened)?;
         let addr = bind.address.clone();
-        tokio::spawn(async move {
+        let shutdown_rx_clone = shutdown_rx.clone();
+
+        let handle = tokio::spawn(async move {
             loop {
-                let conn = match listener.accept().await {
-                    Ok(c) => c,
-                    Err(e) => {
-                        error!(err = %e, listener = %addr, "accept failed; will retry in 1 sec");
-                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                        continue;
+                tokio::select! {
+                    _ = shutdown_rx_clone.as_future() => {
+                        info!("Web server shutting down for {}", addr);
+                        break;
+                    },
+                    conn_result = listener.accept() => {
+                        let conn = match conn_result {
+                            Ok(c) => c,
+                            Err(e) => {
+                                error!(err = %e, listener = %addr, "accept failed; will retry in 1 sec");
+                                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                                continue;
+                            }
+                        };
+                        let svc = Arc::clone(&svc);
+                        let conn_data = *conn.data();
+                        let io = hyper_util::rt::TokioIo::new(conn);
+                        let svc_fn = service_fn(move |req| Arc::clone(&svc).serve(req, conn_data));
+                        tokio::spawn(
+                            hyper::server::conn::http1::Builder::new()
+                                .serve_connection(io, svc_fn)
+                                .with_upgrades(),
+                        );
                     }
-                };
-                let svc = Arc::clone(&svc);
-                let conn_data = *conn.data();
-                let io = hyper_util::rt::TokioIo::new(conn);
-                let svc = Arc::clone(&svc);
-                let svc_fn = service_fn(move |req| Arc::clone(&svc).serve(req, conn_data));
-                tokio::spawn(
-                    hyper::server::conn::http1::Builder::new()
-                        .serve_connection(io, svc_fn)
-                        .with_upgrades(),
-                );
+                }
             }
         });
+        web_handles.push(handle);
     }
     if !preopened.is_empty() {
         warn!(
@@ -429,6 +482,13 @@ async fn inner(
     {
         if let Err(err) = notify(false, &[NotifyState::Stopping]) {
             tracing::warn!(%err, "unable to notify systemd on stopping");
+        }
+    }
+
+    info!("Shutting down web servers.");
+    for handle in web_handles {
+        if let Err(e) = handle.await {
+            error!("Web server task failed: {}", e);
         }
     }
 

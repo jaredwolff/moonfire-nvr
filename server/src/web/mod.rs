@@ -156,6 +156,7 @@ pub struct Config<'a> {
     pub time_zone_name: String,
     pub allow_unauthenticated_permissions: Option<db::Permissions>,
     pub privileged_unix_uid: Option<nix::unistd::Uid>,
+    pub reload_tx: Option<tokio::sync::mpsc::Sender<()>>,
 }
 
 pub struct Service {
@@ -166,6 +167,7 @@ pub struct Service {
     allow_unauthenticated_permissions: Option<db::Permissions>,
     trust_forward_hdrs: bool,
     privileged_unix_uid: Option<nix::unistd::Uid>,
+    reload_tx: Option<tokio::sync::mpsc::Sender<()>>,
 }
 
 /// Useful HTTP `Cache-Control` values to set on successful (HTTP 200) API responses.
@@ -207,6 +209,7 @@ impl Service {
             trust_forward_hdrs: config.trust_forward_hdrs,
             time_zone_name: config.time_zone_name,
             privileged_unix_uid: config.privileged_unix_uid,
+            reload_tx: config.reload_tx,
         })
     }
 
@@ -224,7 +227,12 @@ impl Service {
         tracing::trace!(?path, "path");
         let always_allow_unauthenticated = matches!(
             path,
-            Path::NotFound | Path::Request | Path::Login | Path::Logout | Path::Static
+            Path::NotFound
+                | Path::Request
+                | Path::Login
+                | Path::Logout
+                | Path::Static
+                | Path::Reload
         );
         let caller = self.authenticate(&req, &authreq, &conn_data, always_allow_unauthenticated);
         if let Some(username) = caller
@@ -313,6 +321,10 @@ impl Service {
             Path::StorageDirs => (
                 CacheControl::PrivateDynamic,
                 self.storage_dirs_simple(req, caller)?,
+            ),
+            Path::Reload => (
+                CacheControl::PrivateDynamic,
+                self.reload(req, caller).await?,
             ),
         };
         match cache {
@@ -672,6 +684,54 @@ impl Service {
 
         bail!(Unauthenticated);
     }
+
+    /// Handles reload requests to restart camera configuration.
+    async fn reload(
+        &self,
+        req: Request<::hyper::body::Incoming>,
+        caller: Caller,
+    ) -> ResponseResult {
+        if *req.method() != http::Method::POST {
+            return Ok(plain_response(
+                StatusCode::METHOD_NOT_ALLOWED,
+                "POST expected",
+            ));
+        }
+
+        let permissions = &caller.permissions;
+        if !permissions.admin_cameras {
+            return Err(err!(PermissionDenied, msg("admin_cameras required")));
+        }
+
+        let (parts, b) = into_json_body(req).await?;
+        let r: serde_json::Value = parse_json_body(&b)?;
+
+        // Extract CSRF token if present
+        let csrf = r.get("csrf").and_then(|v| v.as_str());
+        require_csrf_if_session(&caller, csrf)?;
+
+        match &self.reload_tx {
+            Some(tx) => {
+                if let Err(_) = tx.try_send(()) {
+                    return Ok(plain_response(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "Server is busy processing another reload request",
+                    ));
+                }
+                serve_json(
+                    &parts,
+                    &serde_json::json!({
+                        "success": true,
+                        "message": "Configuration reload initiated"
+                    }),
+                )
+            }
+            None => Ok(plain_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Reload functionality not available (server started in read-only mode?)",
+            )),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -702,6 +762,7 @@ mod tests {
                     trust_forward_hdrs: true,
                     time_zone_name: "".to_owned(),
                     privileged_unix_uid: None,
+                    reload_tx: None,
                 })
                 .unwrap(),
             );

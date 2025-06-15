@@ -388,6 +388,20 @@ export async function testCamera(
   });
 }
 
+export async function reloadConfiguration(
+  req: ReloadConfigurationRequest,
+  init: RequestInit
+) {
+  return await json<ReloadConfigurationResponse>("/api/reload", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(req),
+    ...init,
+  });
+}
+
 // Camera management API types
 export interface CamerasResponse {
   cameras: CameraWithId[];
@@ -420,6 +434,15 @@ export interface TestCameraRequest {
 }
 
 export interface TestCameraResponse {
+  success: boolean;
+  message: string;
+}
+
+export interface ReloadConfigurationRequest {
+  csrf?: string;
+}
+
+export interface ReloadConfigurationResponse {
   success: boolean;
   message: string;
 }

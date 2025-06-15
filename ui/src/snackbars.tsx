@@ -154,7 +154,9 @@ export class SnackbarProvider
         {this.props.children}
         {first === undefined ? null : (
           <Snackbar
-            {...first}
+            key={first.key}
+            open={first.open}
+            message={first.message}
             anchorOrigin={{
               vertical: "bottom",
               horizontal: "left",

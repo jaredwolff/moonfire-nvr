@@ -16,6 +16,7 @@ pub(super) enum Path {
     Camera(Uuid),                                     // "/api/cameras/<uuid>/"
     Cameras,                                          // "/api/cameras"
     CameraTest(Uuid),                                 // "/api/cameras/<uuid>/test"
+    Reload,                                           // "/api/reload"
     Signals,                                          // "/api/signals"
     Storage,                                          // "/api/storage"
     StorageDir(i32),                                  // "/api/storage/<id>"
@@ -44,6 +45,7 @@ impl Path {
             "login" => return Path::Login,
             "logout" => return Path::Logout,
             "request" => return Path::Request,
+            "reload" => return Path::Reload,
             "signals" => return Path::Signals,
             "storage" => return Path::Storage,
             "storage-dirs" => return Path::StorageDirs,
@@ -185,6 +187,7 @@ mod tests {
         );
         assert_eq!(Path::decode("/api/login"), Path::Login);
         assert_eq!(Path::decode("/api/logout"), Path::Logout);
+        assert_eq!(Path::decode("/api/reload"), Path::Reload);
         assert_eq!(Path::decode("/api/signals"), Path::Signals);
         assert_eq!(Path::decode("/api/storage"), Path::Storage);
         assert_eq!(Path::decode("/api/storage/42"), Path::StorageDir(42));

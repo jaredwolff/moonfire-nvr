@@ -90,6 +90,9 @@ pub struct Stream {
     pub recent_frame_bytes: usize,
 
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub sample_file_dir_id: Option<i32>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(serialize_with = "Stream::serialize_days")]
     pub days: Option<db::days::Map<db::days::StreamValue>>,
 
@@ -248,6 +251,7 @@ impl Stream {
             total_sample_file_bytes: s.committed.sample_file_bytes,
             fs_bytes: s.committed.fs_bytes,
             record: s.config.mode == db::json::STREAM_MODE_RECORD,
+            sample_file_dir_id: s.sample_file_dir_id,
             days: if include_days { Some(s.days()) } else { None },
             config: include_config.then(|| s.config.clone()),
             num_recent_recordings: s.recent_recordings.len(),
@@ -705,6 +709,7 @@ pub struct DeleteCamera<'a> {
 /// Request body for `POST /api/cameras/<uuid>/test`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct TestCamera<'a> {
     #[serde(borrow)]
     pub csrf: Option<&'a str>,
@@ -774,4 +779,79 @@ pub struct CameraWithId<'a> {
     pub id: i32,
     pub uuid: Uuid,
     pub camera: Camera<'a>,
+}
+
+// Storage API types
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetStorageResponse {
+    pub storage_dirs: Vec<StorageDir>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageDir {
+    pub id: i32,
+    pub uuid: Uuid,
+    pub path: String,
+    pub total_bytes: i64,
+    pub used_bytes: i64,
+    pub streams_using: Vec<StorageStreamUsage>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageStreamUsage {
+    pub stream_id: i32,
+    pub camera_name: String,
+    pub stream_type: String,
+    pub used_bytes: i64,
+    pub duration_90k: i64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PostStorageRequest<'a> {
+    #[serde(borrow)]
+    pub csrf: Option<&'a str>,
+    #[serde(borrow)]
+    pub path: &'a str,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PostStorageResponse {
+    pub id: i32,
+    pub uuid: Uuid,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PatchStorageRequest<'a> {
+    #[serde(borrow)]
+    pub csrf: Option<&'a str>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PatchStorageResponse {
+    pub success: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DeleteStorageRequest<'a> {
+    #[serde(borrow)]
+    pub csrf: Option<&'a str>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DeleteStorageResponse {
+    pub success: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct GetStorageDirsSimpleResponse {
+    pub dirs: Vec<StorageDirSimple>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct StorageDirSimple {
+    pub id: i32,
+    pub path: String,
 }

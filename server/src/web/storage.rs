@@ -5,7 +5,7 @@
 //! Storage management API endpoints.
 
 use crate::json;
-use base::err;
+use base::{bail, err};
 use http::{Method, Request, StatusCode};
 use std::path::PathBuf;
 
@@ -24,13 +24,13 @@ impl Service {
         match *req.method() {
             Method::GET => {
                 if !permissions.view_video {
-                    return Err(err!(PermissionDenied, msg("view_video required")));
+                    bail!(PermissionDenied, msg("view_video required"));
                 }
-                self.get_storage(&req, caller)
+                self.get_storage(&req, caller).await
             }
             Method::POST => {
                 if !permissions.admin_cameras {
-                    return Err(err!(PermissionDenied, msg("admin_cameras required")));
+                    bail!(PermissionDenied, msg("admin_cameras required"));
                 }
                 self.post_storage(req, caller).await
             }
@@ -51,19 +51,19 @@ impl Service {
         match *req.method() {
             Method::GET => {
                 if !permissions.view_video {
-                    return Err(err!(PermissionDenied, msg("view_video required")));
+                    bail!(PermissionDenied, msg("view_video required"));
                 }
-                self.get_storage_dir(&req, caller, id)
+                self.get_storage_dir(&req, caller, id).await
             }
             Method::PATCH => {
                 if !permissions.admin_cameras {
-                    return Err(err!(PermissionDenied, msg("admin_cameras required")));
+                    bail!(PermissionDenied, msg("admin_cameras required"));
                 }
                 self.patch_storage_dir(req, caller, id).await
             }
             Method::DELETE => {
                 if !permissions.admin_cameras {
-                    return Err(err!(PermissionDenied, msg("admin_cameras required")));
+                    bail!(PermissionDenied, msg("admin_cameras required"));
                 }
                 self.delete_storage_dir(req, caller, id).await
             }
@@ -74,105 +74,110 @@ impl Service {
         }
     }
 
-    fn get_storage(
+    /// Collect stream usage information for a given storage directory.
+    fn stream_usage_for_dir(
+        db: &db::LockedDatabase,
+        dir_id: i32,
+    ) -> (i64, Vec<json::StorageStreamUsage>) {
+        let mut used_bytes = 0i64;
+        let mut streams_using = Vec::new();
+
+        for (&stream_id, stream) in db.streams_by_id() {
+            let s = stream.inner.lock();
+            if s.sample_file_dir.as_ref().map(|d| d.id) == Some(dir_id) {
+                used_bytes += s.committed.fs_bytes;
+                streams_using.push(json::StorageStreamUsage {
+                    stream_id,
+                    camera_name: db
+                        .cameras_by_id()
+                        .get(&s.camera_id)
+                        .expect("stream's camera should exist")
+                        .short_name
+                        .clone(),
+                    stream_type: s.type_.as_str().to_string(),
+                    used_bytes: s.committed.fs_bytes,
+                    duration_90k: s.committed.duration.0,
+                });
+            }
+        }
+
+        (used_bytes, streams_using)
+    }
+
+    async fn get_storage(
         &self,
         req: &Request<::hyper::body::Incoming>,
         _caller: Caller,
     ) -> ResponseResult {
-        let db = self.db.lock();
-        let mut storage_dirs = Vec::new();
+        // Collect dir info while holding the db lock, then release before async statfs.
+        let mut storage_dirs: Vec<(json::StorageDir, db::dir::Pool)>;
+        {
+            let db = self.db.lock();
+            storage_dirs = Vec::new();
 
-        for (&id, dir) in db.sample_file_dirs_by_id() {
-            let mut total_bytes = 0i64;
-            let mut used_bytes = 0i64;
-            let mut streams_using = Vec::new();
-
-            // Calculate usage by streams
-            for (&stream_id, stream) in db.streams_by_id() {
-                if stream.sample_file_dir_id == Some(id) {
-                    used_bytes += stream.sample_file_bytes;
-                    streams_using.push(json::StorageStreamUsage {
-                        stream_id,
-                        camera_name: db
-                            .cameras_by_id()
-                            .get(&stream.camera_id)
-                            .map(|c| c.short_name.clone())
-                            .unwrap_or_else(|| format!("camera {}", stream.camera_id)),
-                        stream_type: stream.type_.as_str().to_string(),
-                        used_bytes: stream.sample_file_bytes,
-                        duration_90k: stream.duration.0,
-                    });
-                }
+            for (&id, dir) in db.sample_file_dirs_by_id() {
+                let (used_bytes, streams_using) = Self::stream_usage_for_dir(&db, id);
+                let pool = dir.pool().clone();
+                storage_dirs.push((
+                    json::StorageDir {
+                        id,
+                        uuid: pool.uuid(),
+                        path: pool.path().to_path_buf(),
+                        total_bytes: None,
+                        used_bytes,
+                        streams_using,
+                    },
+                    pool,
+                ));
             }
-
-            // Try to get filesystem stats if directory is accessible
-            if let Ok(dir_handle) = dir.get() {
-                if let Ok(stat) = dir_handle.statfs() {
-                    total_bytes = (stat.blocks_available() * stat.fragment_size()) as i64;
-                }
-            }
-
-            storage_dirs.push(json::StorageDir {
-                id,
-                uuid: dir.uuid,
-                path: dir.path.display().to_string(),
-                total_bytes,
-                used_bytes,
-                streams_using,
-            });
         }
 
-        serve_json(req, &json::GetStorageResponse { storage_dirs })
+        // Fetch filesystem stats asynchronously.
+        for (dir, pool) in &mut storage_dirs {
+            if let Ok(stat) = pool.run("statfs", |ctx| ctx.statfs()).await {
+                #[allow(clippy::useless_conversion)]
+                let bytes = u64::from(stat.blocks_available()) * u64::from(stat.fragment_size());
+                dir.total_bytes = Some(bytes as i64);
+            }
+        }
+
+        let dirs: Vec<json::StorageDir> = storage_dirs.into_iter().map(|(d, _)| d).collect();
+        serve_json(req, &json::GetStorageResponse { storage_dirs: dirs })
     }
 
-    fn get_storage_dir(
+    async fn get_storage_dir(
         &self,
         req: &Request<::hyper::body::Incoming>,
         _caller: Caller,
         id: i32,
     ) -> ResponseResult {
-        let db = self.db.lock();
-        let dir = db
-            .sample_file_dirs_by_id()
-            .get(&id)
-            .ok_or_else(|| err!(NotFound, msg("no such storage directory {id}")))?;
+        let (mut storage_dir, pool) = {
+            let db = self.db.lock();
+            let dir = db
+                .sample_file_dirs_by_id()
+                .get(&id)
+                .ok_or_else(|| err!(NotFound, msg("no such storage directory {id}")))?;
 
-        let mut used_bytes = 0i64;
-        let mut streams_using = Vec::new();
-
-        // Calculate usage by streams
-        for (&stream_id, stream) in db.streams_by_id() {
-            if stream.sample_file_dir_id == Some(id) {
-                used_bytes += stream.sample_file_bytes;
-                streams_using.push(json::StorageStreamUsage {
-                    stream_id,
-                    camera_name: db
-                        .cameras_by_id()
-                        .get(&stream.camera_id)
-                        .map(|c| c.short_name.clone())
-                        .unwrap_or_else(|| format!("camera {}", stream.camera_id)),
-                    stream_type: stream.type_.as_str().to_string(),
-                    used_bytes: stream.sample_file_bytes,
-                    duration_90k: stream.duration.0,
-                });
-            }
-        }
-
-        let mut total_bytes = 0i64;
-        if let Ok(dir_handle) = dir.get() {
-            if let Ok(stat) = dir_handle.statfs() {
-                total_bytes = (stat.blocks_available() * stat.fragment_size()) as i64;
-            }
-        }
-
-        let storage_dir = json::StorageDir {
-            id,
-            uuid: dir.uuid,
-            path: dir.path.display().to_string(),
-            total_bytes,
-            used_bytes,
-            streams_using,
+            let (used_bytes, streams_using) = Self::stream_usage_for_dir(&db, id);
+            let pool = dir.pool().clone();
+            (
+                json::StorageDir {
+                    id,
+                    uuid: pool.uuid(),
+                    path: pool.path().to_path_buf(),
+                    total_bytes: None,
+                    used_bytes,
+                    streams_using,
+                },
+                pool,
+            )
         };
+
+        if let Ok(stat) = pool.run("statfs", |ctx| ctx.statfs()).await {
+            #[allow(clippy::useless_conversion)]
+            let bytes = u64::from(stat.blocks_available()) * u64::from(stat.fragment_size());
+            storage_dir.total_bytes = Some(bytes as i64);
+        }
 
         serve_json(req, &storage_dir)
     }
@@ -186,17 +191,18 @@ impl Service {
         let r: json::PostStorageRequest = parse_json_body(&b)?;
         require_csrf_if_session(&caller, r.csrf)?;
 
-        let mut db = self.db.lock();
-        let id = db.add_sample_file_dir(PathBuf::from(r.path))?;
+        let id = self.db.add_sample_file_dir(PathBuf::from(r.path)).await?;
 
         // Get the UUID from the created directory
-        let uuid = db
+        let uuid = self
+            .db
+            .lock()
             .sample_file_dirs_by_id()
             .get(&id)
             .ok_or_else(|| err!(Internal, msg("directory not found after creation")))?
-            .uuid;
+            .pool()
+            .uuid();
 
-        let (parts, _) = (parts, ());
         serve_json(&parts, &json::PostStorageResponse { id, uuid })
     }
 
@@ -210,12 +216,9 @@ impl Service {
         let r: json::PatchStorageRequest = parse_json_body(&b)?;
         require_csrf_if_session(&caller, r.csrf)?;
 
-        // For now, storage directories can't be updated - they're essentially immutable
-        // once created. This endpoint exists for future extensibility.
-        let _ = r; // Silence unused variable warning
-
-        let (parts, _) = (parts, ());
-        serve_json(&parts, &json::PatchStorageResponse { success: true })
+        // Storage directories can't be updated yet; this endpoint exists for
+        // future extensibility.
+        serve_json(&parts, &json::EmptyResponse {})
     }
 
     async fn delete_storage_dir(
@@ -228,11 +231,9 @@ impl Service {
         let r: json::DeleteStorageRequest = parse_json_body(&b)?;
         require_csrf_if_session(&caller, r.csrf)?;
 
-        let mut db = self.db.lock();
-        db.delete_sample_file_dir(id)?;
+        self.db.delete_sample_file_dir(id).await?;
 
-        let (parts, _) = (parts, ());
-        serve_json(&parts, &json::DeleteStorageResponse { success: true })
+        serve_json(&parts, &json::EmptyResponse {})
     }
 
     pub(super) fn storage_dirs_simple(
@@ -242,7 +243,7 @@ impl Service {
     ) -> ResponseResult {
         let permissions = &caller.permissions;
         if !permissions.view_video {
-            return Err(err!(PermissionDenied, msg("view_video required")));
+            bail!(PermissionDenied, msg("view_video required"));
         }
 
         let db = self.db.lock();
@@ -251,12 +252,11 @@ impl Service {
         for (&id, dir) in db.sample_file_dirs_by_id() {
             dirs.push(json::StorageDirSimple {
                 id,
-                path: dir.path.display().to_string(),
+                path: dir.pool().path().to_path_buf(),
             });
         }
 
-        let (parts, _) = req.into_parts();
-        serve_json(&parts, &json::GetStorageDirsSimpleResponse { dirs })
+        serve_json(&req, &json::GetStorageDirsSimpleResponse { dirs })
     }
 }
 
@@ -282,6 +282,7 @@ mod tests {
             Method::POST => client.post(&url),
             Method::PATCH => client.patch(&url),
             Method::DELETE => client.delete(&url),
+            Method::PUT => client.put(&url),
             _ => panic!("Unsupported method"),
         };
 
@@ -346,6 +347,7 @@ mod tests {
             Method::POST => client.post(&url),
             Method::PATCH => client.patch(&url),
             Method::DELETE => client.delete(&url),
+            Method::PUT => client.put(&url),
             _ => panic!("Unsupported method"),
         };
 
@@ -368,8 +370,8 @@ mod tests {
         req.send().await.unwrap()
     }
 
-    fn create_test_server_with_permissions(perms: db::Permissions) -> Server {
-        let server = Server::new(None);
+    async fn create_test_server_with_permissions(perms: db::Permissions) -> Server {
+        let server = Server::new(None).await;
 
         // Update the test user with the specified permissions
         let mut user_change = server.db.db.lock().users_by_id().get(&1).unwrap().change();
@@ -382,7 +384,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_storage_unauthorized() {
         testutil::init();
-        let server = Server::new(None);
+        let server = Server::new(None).await;
 
         let resp = make_request(&server, Method::GET, "/storage", None).await;
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
@@ -391,7 +393,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_storage_forbidden() {
         testutil::init();
-        let server = create_test_server_with_permissions(db::Permissions::default()); // No view_video permission
+        let server = create_test_server_with_permissions(db::Permissions::default()).await; // No view_video permission
 
         let resp = make_authenticated_request(&server, Method::GET, "/storage", None).await;
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
@@ -402,7 +404,7 @@ mod tests {
         testutil::init();
         let mut perms = db::Permissions::default();
         perms.view_video = true;
-        let server = create_test_server_with_permissions(perms);
+        let server = create_test_server_with_permissions(perms).await;
 
         let resp = make_authenticated_request(&server, Method::GET, "/storage", None).await;
         assert_eq!(resp.status(), StatusCode::OK);
@@ -416,7 +418,7 @@ mod tests {
         testutil::init();
         let mut perms = db::Permissions::default();
         perms.view_video = true;
-        let server = create_test_server_with_permissions(perms);
+        let server = create_test_server_with_permissions(perms).await;
 
         let resp = make_authenticated_request(&server, Method::GET, "/storage", None).await;
         assert_eq!(resp.status(), StatusCode::OK);
@@ -430,7 +432,7 @@ mod tests {
         assert!(dir["id"].is_number());
         assert!(dir["uuid"].is_string());
         assert!(dir["path"].is_string());
-        assert!(dir["totalBytes"].is_number());
+        assert!(dir["totalBytes"].is_number() || dir["totalBytes"].is_null());
         assert!(dir["usedBytes"].is_number());
         assert!(dir["streamsUsing"].is_array());
     }
@@ -438,7 +440,7 @@ mod tests {
     #[tokio::test]
     async fn test_post_storage_unauthorized() {
         testutil::init();
-        let server = Server::new(None);
+        let server = Server::new(None).await;
         let tempdir = TempDir::new().unwrap();
 
         let body = json!({
@@ -454,7 +456,7 @@ mod tests {
         testutil::init();
         let mut perms = db::Permissions::default();
         perms.view_video = true; // Has view_video but not admin_cameras
-        let server = create_test_server_with_permissions(perms);
+        let server = create_test_server_with_permissions(perms).await;
         let tempdir = TempDir::new().unwrap();
 
         let body = json!({
@@ -470,7 +472,7 @@ mod tests {
         testutil::init();
         let mut perms = db::Permissions::default();
         perms.admin_cameras = true;
-        let server = create_test_server_with_permissions(perms);
+        let server = create_test_server_with_permissions(perms).await;
         let tempdir = TempDir::new().unwrap();
 
         let body = json!({
@@ -490,7 +492,7 @@ mod tests {
         testutil::init();
         let mut perms = db::Permissions::default();
         perms.admin_cameras = true;
-        let server = create_test_server_with_permissions(perms);
+        let server = create_test_server_with_permissions(perms).await;
 
         let body = json!({
             "path": "/nonexistent/path/that/should/not/exist"
@@ -506,7 +508,7 @@ mod tests {
         testutil::init();
         let mut perms = db::Permissions::default();
         perms.view_video = true;
-        let server = create_test_server_with_permissions(perms);
+        let server = create_test_server_with_permissions(perms).await;
 
         // Get the test storage directory ID
         let resp = make_authenticated_request(&server, Method::GET, "/storage", None).await;
@@ -530,7 +532,7 @@ mod tests {
         testutil::init();
         let mut perms = db::Permissions::default();
         perms.view_video = true;
-        let server = create_test_server_with_permissions(perms);
+        let server = create_test_server_with_permissions(perms).await;
 
         let resp = make_authenticated_request(&server, Method::GET, "/storage/99999", None).await;
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
@@ -539,7 +541,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_storage_dir_unauthorized() {
         testutil::init();
-        let server = Server::new(None);
+        let server = Server::new(None).await;
 
         let resp = make_request(&server, Method::GET, "/storage/1", None).await;
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
@@ -548,7 +550,7 @@ mod tests {
     #[tokio::test]
     async fn test_patch_storage_dir_unauthorized() {
         testutil::init();
-        let server = Server::new(None);
+        let server = Server::new(None).await;
 
         let body = json!({
             "csrf": "test-csrf-token"
@@ -563,7 +565,7 @@ mod tests {
         testutil::init();
         let mut perms = db::Permissions::default();
         perms.view_video = true; // Has view_video but not admin_cameras
-        let server = create_test_server_with_permissions(perms);
+        let server = create_test_server_with_permissions(perms).await;
 
         let body = json!({});
 
@@ -577,22 +579,19 @@ mod tests {
         testutil::init();
         let mut perms = db::Permissions::default();
         perms.admin_cameras = true;
-        let server = create_test_server_with_permissions(perms);
+        let server = create_test_server_with_permissions(perms).await;
 
         let body = json!({});
 
         let resp =
             make_authenticated_request(&server, Method::PATCH, "/storage/1", Some(body)).await;
         assert_eq!(resp.status(), StatusCode::OK);
-
-        let json: serde_json::Value = resp.json().await.unwrap();
-        assert_eq!(json["success"], true);
     }
 
     #[tokio::test]
     async fn test_delete_storage_dir_unauthorized() {
         testutil::init();
-        let server = Server::new(None);
+        let server = Server::new(None).await;
 
         let body = json!({
             "csrf": "test-csrf-token"
@@ -607,7 +606,7 @@ mod tests {
         testutil::init();
         let mut perms = db::Permissions::default();
         perms.view_video = true; // Has view_video but not admin_cameras
-        let server = create_test_server_with_permissions(perms);
+        let server = create_test_server_with_permissions(perms).await;
 
         let body = json!({});
 
@@ -621,7 +620,7 @@ mod tests {
         testutil::init();
         let mut perms = db::Permissions::default();
         perms.admin_cameras = true;
-        let server = create_test_server_with_permissions(perms);
+        let server = create_test_server_with_permissions(perms).await;
 
         let body = json!({});
 
@@ -633,7 +632,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_storage_dirs_simple_unauthorized() {
         testutil::init();
-        let server = Server::new(None);
+        let server = Server::new(None).await;
 
         let resp = make_request(&server, Method::GET, "/storage-dirs", None).await;
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
@@ -642,7 +641,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_storage_dirs_simple_forbidden() {
         testutil::init();
-        let server = create_test_server_with_permissions(db::Permissions::default()); // No view_video permission
+        let server = create_test_server_with_permissions(db::Permissions::default()).await; // No view_video permission
 
         let resp = make_authenticated_request(&server, Method::GET, "/storage-dirs", None).await;
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
@@ -653,7 +652,7 @@ mod tests {
         testutil::init();
         let mut perms = db::Permissions::default();
         perms.view_video = true;
-        let server = create_test_server_with_permissions(perms);
+        let server = create_test_server_with_permissions(perms).await;
 
         let resp = make_authenticated_request(&server, Method::GET, "/storage-dirs", None).await;
         assert_eq!(resp.status(), StatusCode::OK);
@@ -676,52 +675,36 @@ mod tests {
         testutil::init();
         let mut perms = db::Permissions::default();
         perms.admin_cameras = true;
-        let server = create_test_server_with_permissions(perms);
+        let server = create_test_server_with_permissions(perms).await;
 
-        let client = reqwest::Client::new();
-        let url = format!("{}/api/storage", server.base_url);
-
-        let resp = client
-            .post(&url)
-            .header("Content-Type", "application/json")
-            .body("invalid json")
-            .send()
-            .await
-            .unwrap();
-
-        // Authentication is checked before JSON parsing, so we get 401 instead of 400
-        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        let resp =
+            make_authenticated_request(&server, Method::POST, "/storage", Some(json!("invalid")))
+                .await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
     async fn test_method_not_allowed() {
         testutil::init();
-        let server = Server::new(None);
+        let mut perms = db::Permissions::default();
+        perms.admin_cameras = true;
+        let server = create_test_server_with_permissions(perms).await;
 
-        let client = reqwest::Client::new();
-        let url = format!("{}/api/storage", server.base_url);
-
-        // Authentication is checked before method validation, so we get 401 instead of 405
-        let resp = client.put(&url).send().await.unwrap();
-        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
-
-        let resp = client.head(&url).send().await.unwrap();
-        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        let resp = make_authenticated_request(&server, Method::PUT, "/storage", None).await;
+        assert_eq!(resp.status(), StatusCode::METHOD_NOT_ALLOWED);
     }
 
     #[tokio::test]
     async fn test_storage_dir_method_not_allowed() {
         testutil::init();
-        let server = Server::new(None);
+        let mut perms = db::Permissions::default();
+        perms.admin_cameras = true;
+        let server = create_test_server_with_permissions(perms).await;
 
-        let client = reqwest::Client::new();
-        let url = format!("{}/api/storage/1", server.base_url);
+        let resp = make_authenticated_request(&server, Method::PUT, "/storage/1", None).await;
+        assert_eq!(resp.status(), StatusCode::METHOD_NOT_ALLOWED);
 
-        // Authentication is checked before method validation, so we get 401 instead of 405
-        let resp = client.put(&url).send().await.unwrap();
-        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
-
-        let resp = client.post(&url).send().await.unwrap();
-        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        let resp = make_authenticated_request(&server, Method::POST, "/storage/1", None).await;
+        assert_eq!(resp.status(), StatusCode::METHOD_NOT_ALLOWED);
     }
 }

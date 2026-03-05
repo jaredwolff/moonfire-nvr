@@ -251,7 +251,7 @@ impl Stream {
             total_sample_file_bytes: s.committed.sample_file_bytes,
             fs_bytes: s.committed.fs_bytes,
             record: s.config.mode == db::json::STREAM_MODE_RECORD,
-            sample_file_dir_id: s.sample_file_dir_id,
+            sample_file_dir_id: s.sample_file_dir.as_ref().map(|d| d.id),
             days: if include_days { Some(s.days()) } else { None },
             config: include_config.then(|| s.config.clone()),
             num_recent_recordings: s.recent_recordings.len(),
@@ -713,7 +713,8 @@ pub struct DeleteCamera<'a> {
 pub struct TestCamera<'a> {
     #[serde(borrow)]
     pub csrf: Option<&'a str>,
-    pub stream_type: db::StreamType,
+    #[serde(borrow)]
+    pub stream_type: &'a str,
 }
 
 /// Response body for `POST /api/cameras/<uuid>/test`.
@@ -793,8 +794,8 @@ pub struct GetStorageResponse {
 pub struct StorageDir {
     pub id: i32,
     pub uuid: Uuid,
-    pub path: String,
-    pub total_bytes: i64,
+    pub path: PathBuf,
+    pub total_bytes: Option<i64>,
     pub used_bytes: i64,
     pub streams_using: Vec<StorageStreamUsage>,
 }
@@ -829,11 +830,6 @@ pub struct PatchStorageRequest<'a> {
     pub csrf: Option<&'a str>,
 }
 
-#[derive(Debug, Serialize)]
-pub struct PatchStorageResponse {
-    pub success: bool,
-}
-
 #[derive(Debug, Deserialize)]
 pub struct DeleteStorageRequest<'a> {
     #[serde(borrow)]
@@ -841,9 +837,7 @@ pub struct DeleteStorageRequest<'a> {
 }
 
 #[derive(Debug, Serialize)]
-pub struct DeleteStorageResponse {
-    pub success: bool,
-}
+pub struct EmptyResponse {}
 
 #[derive(Debug, Serialize)]
 pub struct GetStorageDirsSimpleResponse {
@@ -853,5 +847,5 @@ pub struct GetStorageDirsSimpleResponse {
 #[derive(Debug, Serialize)]
 pub struct StorageDirSimple {
     pub id: i32,
-    pub path: String,
+    pub path: PathBuf,
 }
